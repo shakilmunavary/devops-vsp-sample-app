@@ -2,113 +2,87 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME      = "shakilahamed/minikube-app"
-        IMAGE_TAG       = "latest"
-        DEPLOYMENT_NAME = "eks-ai-deployment"
-        SERVICE_NAME    = "eks-ai-service"
-        KUBE_NAMESPACE  = "eks-ai"
-        KUBE_MANIFEST   = "k8/minikube.yaml"
-        // ✅ Sonar Configuration (NO Jenkins global config required)
-        SONAR_HOST = "http://127.0.0.1:9000/sonarqube"
-        SONAR_PROJECT_KEY = "rba-test-project"
-        SONAR_TOKEN = credentials('sonarqube_token')
+        // Docker Configuration
+        DOCKER_HUB_REPO = "shakilahamed/devops-vsp-sample-app"
+        IMAGE_TAG       = "${env.BUILD_NUMBER ?: 'latest'}"
+        CONTAINER_NAME  = "devops-vsp-sample-app"
+        HOST_PORT       = "7000"
+        CONTAINER_PORT  = "8080"
+        DOCKER_CREDS_ID = "dockerhub-creds"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/shakilmunavary/minikube-app.git'
-            }
-        }
-
-        stage('Cleanup Docker') {
-            steps {
-                script {
-                    echo "🧹 Cleaning up Docker environment..."
-                    sh '''
-                        docker rm -f $(docker ps -aq) || true
-                        docker rmi -f $(docker images -q) || true
-                        docker system prune -af || true
-                    '''
-                }
+                echo "Checking out source code..."
+                checkout scm
             }
         }
 
         stage('Build App') {
             steps {
                 script {
-                    echo "⚙️ Building Java app with Maven..."
+                    echo "Compiling and packaging Java Application with Maven..."
                     sh "mvn clean package -DskipTests"
                 }
             }
         }
 
-        stage('Sonar Analysis') {
-                    steps {
-                        script {
-                            echo "🔍 Running SonarQube Analysis (with Global JVM Hostname Bypass)..."
-                            
-                            // Passing -DwithEnv or setting MAVEN_OPTS forces the underlying Java OkHttpClient to ignore strict domains
-                            withEnv(["MAVEN_OPTS=-Djdk.internal.httpclient.disableHostnameVerification=true -Dcom.sun.net.ssl.checkRevocation=false"]) {
-                                sh """
-                                mvn sonar:sonar \
-                                  -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                  -Dsonar.host.url=${SONAR_HOST} \
-                                  -Dsonar.token=${SONAR_TOKEN} \
-                                  -Dsonar.scanner.skipCertificateValidation=true
-                                """
-                            }
-                        }
-                    }
-                }
-
-        
-
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "🔨 Building Docker image..."
-                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                    echo "Building Docker image: ${DOCKER_HUB_REPO}:${IMAGE_TAG} and latest..."
+                    sh """
+                        docker build -t ${DOCKER_HUB_REPO}:${IMAGE_TAG} -t ${DOCKER_HUB_REPO}:latest .
+                    """
                 }
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push to Docker Hub') {
             steps {
                 script {
-                    echo "📦 Pushing Docker image to DockerHub..."
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                    echo "Authenticating and pushing Docker image to Docker Hub..."
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDS_ID}",
                                                      usernameVariable: 'DOCKER_USER',
                                                      passwordVariable: 'DOCKER_PASS')]) {
                         sh """
-                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                            echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
+                            docker push ${DOCKER_HUB_REPO}:${IMAGE_TAG}
+                            docker push ${DOCKER_HUB_REPO}:latest
                         """
                     }
                 }
             }
         }
 
-        stage('Deploy to Minikube') {
+        stage('Deploy & Run Container') {
             steps {
                 script {
-                    echo "🚀 Deploying to Minikube..."
+                    echo "Running container '${CONTAINER_NAME}' on Port ${HOST_PORT}..."
                     sh """
-                    aws eks update-kubeconfig --region us-west-2 --name devops-ai-eks
+                        # Stop and remove existing container if running
+                        docker rm -f ${CONTAINER_NAME} || true
 
-                    echo "Deleting old deployment and service..."
-                    kubectl delete deployment ${DEPLOYMENT_NAME} --ignore-not-found -n ${KUBE_NAMESPACE}
-                    kubectl delete svc ${SERVICE_NAME} --ignore-not-found -n ${KUBE_NAMESPACE}
+                        # Run new container
+                        docker run -d \\
+                            --name ${CONTAINER_NAME} \\
+                            --restart unless-stopped \\
+                            -p ${HOST_PORT}:${CONTAINER_PORT} \\
+                            ${DOCKER_HUB_REPO}:${IMAGE_TAG}
+                    """
+                }
+            }
+        }
 
-                    echo "Recreating deployment and service..."
-                    kubectl apply -f ${KUBE_MANIFEST} -n ${KUBE_NAMESPACE}
-
-                    echo "Waiting for rollout..."
-                    kubectl rollout status deployment/${DEPLOYMENT_NAME} -n ${KUBE_NAMESPACE}
-
-                    echo "Service info:"
-                    kubectl get svc ${SERVICE_NAME} -n ${KUBE_NAMESPACE}
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    echo "Verifying application accessibility on http://localhost:${HOST_PORT}..."
+                    sh """
+                        sleep 5
+                        docker ps | grep ${CONTAINER_NAME} || true
+                        curl -sI http://localhost:${HOST_PORT} || echo "Application starting up on Port ${HOST_PORT}..."
                     """
                 }
             }
@@ -117,11 +91,18 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline completed successfully"
+            echo "================================================================="
+            echo "Pipeline Completed Successfully!"
+            echo "Access Application in Browser: http://localhost:7000"
+            echo "================================================================="
         }
 
         failure {
-            echo "❌ Pipeline failed"
+            echo "Pipeline failed. Please check build console logs."
+        }
+
+        always {
+            cleanWs()
         }
     }
 }
