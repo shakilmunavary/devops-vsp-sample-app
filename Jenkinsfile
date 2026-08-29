@@ -7,14 +7,14 @@ pipeline {
         IMAGE_TAG       = "${env.BUILD_NUMBER ?: 'latest'}"
         CONTAINER_NAME  = "devops-vsp-sample-app"
         HOST_PORT       = "7000"
-        CONTAINER_PORT  = "8080"
         DOCKER_CREDS_ID = "dockerhub-creds"
+        GITHUB_CREDS_ID = "github-token"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                echo "Checking out source code..."
+                echo "📥 Checking out source code..."
                 checkout scm
             }
         }
@@ -22,7 +22,7 @@ pipeline {
         stage('Build App') {
             steps {
                 script {
-                    echo "Compiling and packaging Java Application with Maven..."
+                    echo "⚙️ Compiling and packaging Java Application with Maven..."
                     sh "mvn clean package -DskipTests"
                 }
             }
@@ -31,7 +31,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "Building Docker image: ${DOCKER_HUB_REPO}:${IMAGE_TAG} and latest..."
+                    echo "🔨 Building Docker image: ${DOCKER_HUB_REPO}:${IMAGE_TAG} and latest..."
                     sh """
                         docker build -t ${DOCKER_HUB_REPO}:${IMAGE_TAG} -t ${DOCKER_HUB_REPO}:latest .
                     """
@@ -42,7 +42,7 @@ pipeline {
         stage('Push to Docker Hub') {
             steps {
                 script {
-                    echo "Authenticating and pushing Docker image to Docker Hub..."
+                    echo "📦 Authenticating and pushing Docker image to Docker Hub..."
                     withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDS_ID}",
                                                      usernameVariable: 'DOCKER_USER',
                                                      passwordVariable: 'DOCKER_PASS')]) {
@@ -59,18 +59,21 @@ pipeline {
         stage('Deploy & Run Container') {
             steps {
                 script {
-                    echo "Running container '${CONTAINER_NAME}' on Port ${HOST_PORT}..."
-                    sh """
-                        # Stop and remove existing container if running
-                        docker rm -f ${CONTAINER_NAME} || true
+                    echo "🚀 Running container '${CONTAINER_NAME}' on Port ${HOST_PORT}..."
+                    withCredentials([string(credentialsId: "${GITHUB_CREDS_ID}", variable: 'APP_GITHUB_TOKEN')]) {
+                        sh """
+                            # Stop and remove existing container if running
+                            docker rm -f ${CONTAINER_NAME} || true
 
-                        # Run new container
-                        docker run -d \\
-                            --name ${CONTAINER_NAME} \\
-                            --restart unless-stopped \\
-                            -p ${HOST_PORT}:${CONTAINER_PORT} \\
-                            ${DOCKER_HUB_REPO}:${IMAGE_TAG}
-                    """
+                            # Run container with host networking and inject GitHub token
+                            docker run -d \\
+                                --name ${CONTAINER_NAME} \\
+                                --restart unless-stopped \\
+                                --net=host \\
+                                -e GITHUB_TOKEN="\$APP_GITHUB_TOKEN" \\
+                                ${DOCKER_HUB_REPO}:${IMAGE_TAG}
+                        """
+                    }
                 }
             }
         }
@@ -78,11 +81,12 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    echo "Verifying application accessibility on http://localhost:${HOST_PORT}..."
+                    echo "🔍 Verifying application accessibility on http://localhost:${HOST_PORT}..."
                     sh """
-                        sleep 5
+                        sleep 8
                         docker ps | grep ${CONTAINER_NAME} || true
-                        curl -sI http://localhost:${HOST_PORT} || echo "Application starting up on Port ${HOST_PORT}..."
+                        curl -sI http://localhost:${HOST_PORT}/ping || echo "Application ping endpoint ready..."
+                        curl -sI http://localhost:${HOST_PORT}/dashboard || echo "Application dashboard ready..."
                     """
                 }
             }
@@ -92,13 +96,13 @@ pipeline {
     post {
         success {
             echo "================================================================="
-            echo "Pipeline Completed Successfully!"
-            echo "Access Application in Browser: http://localhost:7000"
+            echo "🎉 Pipeline Completed Successfully!"
+            echo "🌐 Access Application in Browser: http://localhost:7000/dashboard"
             echo "================================================================="
         }
 
         failure {
-            echo "Pipeline failed. Please check build console logs."
+            echo "❌ Pipeline failed. Please check build console logs."
         }
 
         always {
