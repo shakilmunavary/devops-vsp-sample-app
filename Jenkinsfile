@@ -19,6 +19,23 @@ pipeline {
             }
         }
 
+        stage('Ensure Docker Service') {
+            steps {
+                script {
+                    echo "🐳 Verifying Docker daemon is active..."
+                    sh """
+                        if ! docker info >/dev/null 2>&1; then
+                            echo "⚠️ Docker daemon is not running. Starting Docker service..."
+                            sudo service docker start || true
+                            sleep 3
+                        fi
+                        docker info >/dev/null 2>&1 || (echo "❌ Could not start Docker daemon"; exit 1)
+                        echo "✅ Docker daemon is active and ready."
+                    """
+                }
+            }
+        }
+
         stage('Build App') {
             steps {
                 script {
@@ -78,6 +95,26 @@ pipeline {
             }
         }
 
+        stage('Purge Old Images') {
+            steps {
+                script {
+                    echo "🧹 Purging old image tags to keep only the latest version..."
+                    sh """
+                        # Prune dangling builder & intermediate images
+                        docker image prune -f || true
+
+                        # Remove older version tags of devops-vsp-sample-app, keeping only :latest and current tag
+                        docker images --filter=reference='${DOCKER_HUB_REPO}:*' --format "{{.Repository}}:{{.Tag}}" | while read -r repo_tag; do
+                            if [ "\$repo_tag" != "${DOCKER_HUB_REPO}:latest" ] && [ "\$repo_tag" != "${DOCKER_HUB_REPO}:${IMAGE_TAG}" ]; then
+                                echo "Purging old image tag: \$repo_tag"
+                                docker rmi -f "\$repo_tag" 2>/dev/null || true
+                            fi
+                        done
+                    """
+                }
+            }
+        }
+
         stage('Verify Deployment') {
             steps {
                 script {
@@ -106,6 +143,7 @@ pipeline {
         }
 
         always {
+            sh "docker image prune -f || true"
             cleanWs()
         }
     }
