@@ -76,7 +76,7 @@ pipeline {
         stage('Deploy & Run Container') {
             steps {
                 script {
-                    echo "🚀 Running container '${CONTAINER_NAME}' on Port ${HOST_PORT}..."
+                    echo "🚀 Running container '${CONTAINER_NAME}' with latest image on Port ${HOST_PORT}..."
                     withCredentials([string(credentialsId: "${GITHUB_CREDS_ID}", variable: 'APP_GITHUB_TOKEN')]) {
                         sh """
                             # Stop and remove existing container if running
@@ -88,28 +88,28 @@ pipeline {
                                 --restart unless-stopped \\
                                 --net=host \\
                                 -e GITHUB_TOKEN="\$APP_GITHUB_TOKEN" \\
-                                ${DOCKER_HUB_REPO}:${IMAGE_TAG}
+                                ${DOCKER_HUB_REPO}:latest
                         """
                     }
                 }
             }
         }
 
-        stage('Purge Old Images') {
+        stage('Purge Old & Intermediate Images') {
             steps {
                 script {
-                    echo "🧹 Purging old image tags to keep only the latest version..."
+                    echo "🧹 Cleaning up local images to retain ONLY '${DOCKER_HUB_REPO}:latest'..."
                     sh """
-                        # Prune dangling builder & intermediate images
-                        docker image prune -f || true
+                        # Untag the build-number tag so only :latest remains
+                        if [ "${IMAGE_TAG}" != "latest" ]; then
+                            docker rmi ${DOCKER_HUB_REPO}:${IMAGE_TAG} 2>/dev/null || true
+                        fi
 
-                        # Remove older version tags of devops-vsp-sample-app, keeping only :latest and current tag
-                        docker images --filter=reference='${DOCKER_HUB_REPO}:*' --format "{{.Repository}}:{{.Tag}}" | while read -r repo_tag; do
-                            if [ "\$repo_tag" != "${DOCKER_HUB_REPO}:latest" ] && [ "\$repo_tag" != "${DOCKER_HUB_REPO}:${IMAGE_TAG}" ]; then
-                                echo "Purging old image tag: \$repo_tag"
-                                docker rmi -f "\$repo_tag" 2>/dev/null || true
-                            fi
-                        done
+                        # Remove base builder image (eclipse-temurin)
+                        docker rmi eclipse-temurin:17-jdk-alpine 2>/dev/null || true
+
+                        # Prune any dangling and untagged intermediate layers
+                        docker image prune -f || true
                     """
                 }
             }
