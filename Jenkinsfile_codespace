@@ -1,0 +1,163 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_HUB_REPO = "shakilahamed/devops-vsp-sample-app"
+        IMAGE_TAG       = "${env.BUILD_NUMBER ?: 'latest'}"
+        CONTAINER_NAME  = "devops-vsp-sample-app"
+        HOST_PORT       = "7000"
+        DOCKER_CREDS_ID = "dockerhub-creds"
+        GITHUB_CREDS_ID = "github-token"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "📥 Checking out source code..."
+                checkout scm
+            }
+        }
+
+        stage('Ensure Docker Access') {
+            steps {
+                script {
+                    echo "🐳 Checking Docker availability..."
+                    sh '''
+                        set -e
+                        docker info >/dev/null 2>&1 || {
+                            echo "Docker socket is not accessible yet; trying to start daemon..."
+                            sudo dockerd >/tmp/dockerd.log 2>&1 &
+                            sleep 8
+                        }
+
+                        docker info >/dev/null 2>&1 || {
+                            echo "❌ Docker is still unavailable"
+                            tail -n 80 /tmp/dockerd.log 2>/dev/null || true
+                            exit 1
+                        }
+
+                        echo "✅ Docker is ready."
+                    '''
+                }
+            }
+        }
+
+        stage('Build App') {
+            steps {
+                script {
+                    echo "⚙️ Building Java app with Maven..."
+                    sh 'mvn clean package -DskipTests'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo "🔨 Building Docker image..."
+                    sh """
+                        docker build -t ${DOCKER_HUB_REPO}:${IMAGE_TAG} -t ${DOCKER_HUB_REPO}:latest .
+                    """
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            when {
+                expression {
+                    return env.DOCKER_CREDS_ID != null && env.DOCKER_CREDS_ID != ""
+                }
+            }
+            steps {
+                script {
+                    echo "📦 Pushing image to Docker Hub..."
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: "${DOCKER_CREDS_ID}",
+                            usernameVariable: 'DOCKER_USER',
+                            passwordVariable: 'DOCKER_PASS'
+                        )
+                    ]) {
+                        sh '''
+                            set -e
+                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                            docker push ${DOCKER_HUB_REPO}:${IMAGE_TAG}
+                            docker push ${DOCKER_HUB_REPO}:latest
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy & Run Container') {
+            steps {
+                script {
+                    echo "🚀 Starting app container..."
+                    withCredentials([
+                        string(credentialsId: "${GITHUB_CREDS_ID}", variable: 'APP_GITHUB_TOKEN')
+                    ]) {
+                        sh """
+                            set -e
+                            docker rm -f ${CONTAINER_NAME} || true
+                            docker run -d \\
+                                --name ${CONTAINER_NAME} \\
+                                --restart unless-stopped \\
+                                -p ${HOST_PORT}:7000 \\
+                                -e GITHUB_TOKEN=\"\$APP_GITHUB_TOKEN\" \\
+                                ${DOCKER_HUB_REPO}:latest
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Purge Old Images') {
+            steps {
+                script {
+                    echo "🧹 Cleaning stale images..."
+                    sh """
+                        set +e
+                        if [ "${IMAGE_TAG}" != "latest" ]; then
+                            docker rmi ${DOCKER_HUB_REPO}:${IMAGE_TAG} 2>/dev/null || true
+                        fi
+                        docker rmi eclipse-temurin:17-jdk-alpine 2>/dev/null || true
+                        docker image prune -f || true
+                    """
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    echo "🔍 Verifying app is reachable..."
+                    sh """
+                        set +e
+                        sleep 8
+                        docker ps | grep ${CONTAINER_NAME} || true
+                        curl -fsI http://localhost:${HOST_PORT}/ping || echo "Ping endpoint not ready yet"
+                        curl -fsI http://localhost:${HOST_PORT}/dashboard || echo "Dashboard endpoint not ready yet"
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "========================================================"
+            echo "🎉 Pipeline Completed Successfully!"
+            echo "🌐 Access app: http://localhost:${HOST_PORT}/dashboard"
+            echo "========================================================"
+        }
+
+        failure {
+            echo "❌ Pipeline failed. Please check the build logs."
+        }
+
+        always {
+            sh "docker image prune -f || true"
+            cleanWs()
+        }
+    }
+}
