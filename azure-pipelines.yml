@@ -15,6 +15,7 @@ steps:
     versionSpec: '17'
     jdkArchitectureOption: 'x64'
     jdkSourceOption: 'PreInstalled'
+  displayName: 'Setup Java JDK 17'
 
 - task: Maven@3
   inputs:
@@ -31,11 +32,12 @@ steps:
     SourceFolder: '$(System.DefaultWorkingDirectory)/target'
     Contents: '*.jar'
     TargetFolder: '$(Build.ArtifactStagingDirectory)'
-  displayName: 'Copy JAR Artifact'
+  displayName: 'Stage Build Artifacts'
 
-- task: PublishBuildArtifacts@1
+- task: AzureWebApp@1
   inputs:
-    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-    ArtifactName: 'drop'
-    publishLocation: 'Container'
-  displayName: 'Publish Build Artifacts'
+    azureSubscription: 'azure-sp-connection'
+    appType: 'webAppLinux'
+    appName: 'devops-vsp-sample-app-shakil'
+    package: '$(Build.ArtifactStagingDirectory)/*.jar'
+  displayName: 'Deploy to Azure App Service'
