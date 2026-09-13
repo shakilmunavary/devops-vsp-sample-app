@@ -1,9 +1,7 @@
 package com.controller;
 
 import com.model.User;
-import com.model.GitHubRepo;
 import com.repository.UserRepository;
-import com.service.GitHubService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -17,36 +15,43 @@ public class AppController {
     @Autowired
     private UserRepository userRepository;
 
-    @Autowired
-    private GitHubService gitHubService;
-
-    @GetMapping("/dashboard")
+    @GetMapping({"/", "/dashboard", "/users"})
     public String dashboard(Model model) {
         List<User> users = userRepository.findAll();
-        List<GitHubRepo> repos = gitHubService.getUserRepos();
-
         model.addAttribute("users", users);
-        model.addAttribute("repos", repos);
         model.addAttribute("user", new User());
-
         return "dashboard";
     }
 
     @PostMapping("/add")
     public String addUser(@ModelAttribute User user) {
         userRepository.save(user);
-        return "redirect:/dashboard"; // ✅ fixed redirect
+        return "redirect:/dashboard";
+    }
+
+    @PostMapping("/trigger-error")
+    public String triggerError() {
+        // Intentionally insert a 651-character string into the name column (VARCHAR 255)
+        // This generates the exact SQLDataException 22001 column truncation error for AI SRE triage
+        String longPayload = "http://localhost:7000/dashboard/users/registration/callback/verify?token="
+                + "A".repeat(500)
+                + "&session_id=sre_error_simulation_test_2026";
+        User errorUser = new User();
+        errorUser.setName(longPayload);
+        errorUser.setEmail("sre-test@example.com");
+        userRepository.save(errorUser);
+        return "redirect:/dashboard";
     }
 
     @ResponseBody
-    @GetMapping("/github/repo/details/{repoName}")
-    public GitHubRepo getRepoDetails(@PathVariable String repoName) {
-        return gitHubService.getRepoByName(repoName);
+    @GetMapping("/api/users")
+    public List<User> getUsersApi() {
+        return userRepository.findAll();
     }
 
     @ResponseBody
     @GetMapping("/ping")
     public String ping() {
-        return "App is alive";
+        return "App is healthy and running on H2 In-Memory DB";
     }
 }
