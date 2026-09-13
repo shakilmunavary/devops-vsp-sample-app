@@ -29,17 +29,15 @@ public class AppController {
         return "redirect:/dashboard";
     }
 
-    @PostMapping("/trigger-error")
-    public String triggerError() {
-        // Intentionally insert a 651-character string into the name column (VARCHAR 255)
-        // This generates the exact SQLDataException 22001 column truncation error for AI SRE triage
-        String longPayload = "http://localhost:7000/dashboard/users/registration/callback/verify?token="
-                + "A".repeat(500)
-                + "&session_id=sre_error_simulation_test_2026";
-        User errorUser = new User();
-        errorUser.setName(longPayload);
-        errorUser.setEmail("sre-test@example.com");
-        userRepository.save(errorUser);
+    @GetMapping("/delete/{id}")
+    public String deleteUser(@PathVariable("id") Long id) {
+        userRepository.deleteById(id);
+        return "redirect:/dashboard";
+    }
+
+    @PostMapping("/delete/{id}")
+    public String deleteUserPost(@PathVariable("id") Long id) {
+        userRepository.deleteById(id);
         return "redirect:/dashboard";
     }
 
